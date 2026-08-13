@@ -12,18 +12,17 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
 app = Flask(__name__)
-app.secret_key = 'votre_cle_secrete'  # À changer en production
+app.secret_key = 'votre_cle_secrete'
 
-# --- Configuration base de données (PostgreSQL) ---
+# --- Configuration base de données ---
 database_url = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost/school_db')
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 db = SQLAlchemy(app)
 
-# --- Modèles ---
+# --- Modèles (inchangés) ---
 class AnneeScolaire(db.Model):
     __tablename__ = 'annees'
     id = db.Column(db.Integer, primary_key=True)
@@ -212,7 +211,6 @@ def get_bulletin_annuel(eleve_id):
         'moyenne_annuelle': round(moyenne_annuelle, 2) if moyenne_annuelle is not None else None
     }
 
-# --- Génération PDF (inchangée) ---
 def generer_pdf_bulletin(data, type_bulletin='trimestre'):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
@@ -276,7 +274,6 @@ def generer_pdf_bulletin(data, type_bulletin='trimestre'):
     buffer.seek(0)
     return buffer
 
-# --- Fonction d'initialisation des trimestres (remplace before_first_request) ---
 def init_trimestres():
     with app.app_context():
         annees = AnneeScolaire.query.all()
@@ -288,7 +285,7 @@ def init_trimestres():
             db.session.commit()
         print("Trimestres initialisés avec succès.")
 
-# --- Template de base (commun à toutes les pages) ---
+# --- Template de base (avec le bloc) ---
 BASE_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -349,8 +346,8 @@ def index():
         <h2>Bienvenue !</h2>
         <p>Utilisez le menu ci-dessus pour gérer votre établissement.</p>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template)
 
 @app.route('/annees', methods=['GET', 'POST'])
 def annees():
@@ -379,8 +376,8 @@ def annees():
         {% endfor %}
         </ul>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, annees=annees)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template, annees=annees)
 
 @app.route('/annee/supprimer/<int:id>')
 def supprimer_annee(id):
@@ -431,8 +428,8 @@ def classes():
         {% endfor %}
         </ul>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, annees=annees, classes=classes)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template, annees=annees, classes=classes)
 
 @app.route('/classe/supprimer/<int:id>')
 def supprimer_classe(id):
@@ -467,8 +464,8 @@ def disciplines():
         {% endfor %}
         </ul>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, disciplines=disciplines)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template, disciplines=disciplines)
 
 @app.route('/discipline/supprimer/<int:id>')
 def supprimer_discipline(id):
@@ -523,8 +520,8 @@ def coefficients():
             {% endfor %}
         </table>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, classes=classes, disciplines=disciplines, coeffs=coeffs)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template, classes=classes, disciplines=disciplines, coeffs=coeffs)
 
 @app.route('/coefficient/supprimer/<int:id>')
 def supprimer_coefficient(id):
@@ -576,8 +573,8 @@ def eleves():
             {% endfor %}
         </table>
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, classes=classes, eleves=eleves)
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template, classes=classes, eleves=eleves)
 
 @app.route('/eleve/supprimer/<int:id>')
 def supprimer_eleve(id):
@@ -697,8 +694,8 @@ def notes():
             </form>
         {% endif %}
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE,
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template,
                                    annees=annees, classes=classes, trimestres=trimestres,
                                    disciplines=disciplines, eleves=eleves,
                                    annee_id=annee_id, classe_id=classe_id,
@@ -761,8 +758,8 @@ def bulletins():
             </ul>
         {% endif %}
     """
-    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
-    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE,
+    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full_template,
                                    annees=annees, classes=classes, trimestres=trimestres,
                                    eleves=eleves, annee_id=annee_id, classe_id=classe_id,
                                    trimestre_id=trimestre_id, type_bulletin=type_bulletin)
