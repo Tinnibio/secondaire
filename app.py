@@ -1,6 +1,5 @@
 from flask import Flask, request, render_template_string, redirect, url_for, flash, send_file
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
 from datetime import datetime
 import os
 import io
@@ -16,9 +15,7 @@ app = Flask(__name__)
 app.secret_key = 'votre_cle_secrete'  # À changer en production
 
 # --- Configuration base de données (PostgreSQL) ---
-# Pour Render, la variable d'environnement DATABASE_URL est fournie
 database_url = os.environ.get('DATABASE_URL', 'postgresql://user:pass@localhost/school_db')
-# Render utilise souvent 'postgres' au lieu de 'postgresql' dans l'URL
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -74,7 +71,7 @@ class Eleve(db.Model):
 class Trimestre(db.Model):
     __tablename__ = 'trimestres'
     id = db.Column(db.Integer, primary_key=True)
-    nom = db.Column(db.String(20), nullable=False)  # ex: "T1", "T2", "T3"
+    nom = db.Column(db.String(20), nullable=False)
     ordre = db.Column(db.Integer, nullable=False)
     annee_id = db.Column(db.Integer, db.ForeignKey('annees.id'), nullable=False)
     devoirs = db.relationship('Devoir', backref='trimestre', lazy='dynamic', cascade='all, delete-orphan')
@@ -115,10 +112,8 @@ class NoteExamen(db.Model):
     examen_id = db.Column(db.Integer, db.ForeignKey('examens.id'), nullable=False)
     __table_args__ = (db.UniqueConstraint('eleve_id', 'examen_id', name='unique_note_examen'),)
 
-# --- Fonctions de calcul ---
+# --- Fonctions de calcul (inchangées) ---
 def get_notes_trimestre(eleve_id, classe_id, discipline_id, trimestre_id):
-    """Retourne (moyenne_devoirs, note_examen) pour un élève, une discipline, un trimestre."""
-    # Devoirs
     devoir_notes = db.session.query(NoteDevoir.valeur).join(Devoir).filter(
         NoteDevoir.eleve_id == eleve_id,
         Devoir.classe_id == classe_id,
@@ -127,8 +122,6 @@ def get_notes_trimestre(eleve_id, classe_id, discipline_id, trimestre_id):
     ).all()
     notes = [n[0] for n in devoir_notes]
     moyenne = sum(notes)/len(notes) if notes else None
-
-    # Examen
     exam_note = db.session.query(NoteExamen.valeur).join(Examen).filter(
         NoteExamen.eleve_id == eleve_id,
         Examen.classe_id == classe_id,
@@ -139,7 +132,6 @@ def get_notes_trimestre(eleve_id, classe_id, discipline_id, trimestre_id):
     return moyenne, note_exam
 
 def calculer_moyenne_trimestre(eleve_id, classe_id, trimestre_id):
-    """Calcule la moyenne générale d'un élève pour un trimestre donné."""
     disciplines = Discipline.query.all()
     total_coeff = 0
     total_note_coeff = 0
@@ -158,7 +150,6 @@ def calculer_moyenne_trimestre(eleve_id, classe_id, trimestre_id):
     return total_note_coeff / total_coeff
 
 def get_bulletin_trimestre(eleve_id, trimestre_id):
-    """Renvoie un dict avec les infos pour le bulletin trimestriel."""
     eleve = Eleve.query.get(eleve_id)
     if not eleve:
         return None
@@ -167,7 +158,6 @@ def get_bulletin_trimestre(eleve_id, trimestre_id):
     trimestre = Trimestre.query.get(trimestre_id)
     if not trimestre or trimestre.annee_id != annee.id:
         return None
-
     lignes = []
     for disc in Discipline.query.all():
         coeff_obj = Coefficient.query.filter_by(classe_id=classe.id, discipline_id=disc.id).first()
@@ -197,7 +187,6 @@ def get_bulletin_trimestre(eleve_id, trimestre_id):
     }
 
 def get_bulletin_annuel(eleve_id):
-    """Renvoie la moyenne annuelle (moyenne des trois trimestres) et les détails."""
     eleve = Eleve.query.get(eleve_id)
     if not eleve:
         return None
@@ -223,9 +212,8 @@ def get_bulletin_annuel(eleve_id):
         'moyenne_annuelle': round(moyenne_annuelle, 2) if moyenne_annuelle is not None else None
     }
 
-# --- Génération PDF ---
+# --- Génération PDF (inchangée) ---
 def generer_pdf_bulletin(data, type_bulletin='trimestre'):
-    """Génère un PDF pour le bulletin (trimestriel ou annuel)."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
@@ -240,7 +228,6 @@ def generer_pdf_bulletin(data, type_bulletin='trimestre'):
         elements.append(Spacer(1, 0.5*cm))
         elements.append(Paragraph(sous_titre, style_normal))
         elements.append(Spacer(1, 0.5*cm))
-        # Tableau
         table_data = [['Discipline', 'Note classe', 'Note examen', 'Note finale', 'Coef.', 'Note coef.']]
         for ligne in data['lignes']:
             table_data.append([
@@ -263,7 +250,7 @@ def generer_pdf_bulletin(data, type_bulletin='trimestre'):
             ('GRID', (0,0), (-1,-1), 1, colors.black)
         ]))
         elements.append(t)
-    else:  # annuel
+    else:
         titre = f"Bulletin annuel - {data['annee'].libelle}"
         sous_titre = f"{data['eleve'].prenom} {data['eleve'].nom} - {data['classe'].nom}"
         elements.append(Paragraph(titre, style_title))
@@ -289,8 +276,19 @@ def generer_pdf_bulletin(data, type_bulletin='trimestre'):
     buffer.seek(0)
     return buffer
 
-# --- Routes HTML (templates intégrés) ---
+# --- Fonction d'initialisation des trimestres (remplace before_first_request) ---
+def init_trimestres():
+    with app.app_context():
+        annees = AnneeScolaire.query.all()
+        for annee in annees:
+            for ordre, nom in [(1, 'T1'), (2, 'T2'), (3, 'T3')]:
+                if not Trimestre.query.filter_by(annee_id=annee.id, ordre=ordre).first():
+                    trim = Trimestre(nom=nom, ordre=ordre, annee_id=annee.id)
+                    db.session.add(trim)
+            db.session.commit()
+        print("Trimestres initialisés avec succès.")
 
+# --- Template de base (commun à toutes les pages) ---
 BASE_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -343,14 +341,17 @@ BASE_TEMPLATE = """
 </html>
 """
 
+# --- Routes ---
+
 @app.route('/')
 def index():
-    return render_template_string(BASE_TEMPLATE, content='''
+    content = """
         <h2>Bienvenue !</h2>
         <p>Utilisez le menu ci-dessus pour gérer votre établissement.</p>
-    ''')
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE)
 
-# --- Années ---
 @app.route('/annees', methods=['GET', 'POST'])
 def annees():
     if request.method == 'POST':
@@ -362,7 +363,7 @@ def annees():
             flash('Année ajoutée.')
         return redirect(url_for('annees'))
     annees = AnneeScolaire.query.all()
-    content = '''
+    content = """
         <h2>Années scolaires</h2>
         <form method="post" class="form-inline">
             <input type="text" name="libelle" placeholder="Ex: 2024-2025" required>
@@ -377,8 +378,9 @@ def annees():
             </li>
         {% endfor %}
         </ul>
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'), content=content, annees=annees)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, annees=annees)
 
 @app.route('/annee/supprimer/<int:id>')
 def supprimer_annee(id):
@@ -396,7 +398,6 @@ def basculer_annee(id):
     flash('Statut modifié.')
     return redirect(url_for('annees'))
 
-# --- Classes ---
 @app.route('/classes', methods=['GET', 'POST'])
 def classes():
     if request.method == 'POST':
@@ -410,7 +411,7 @@ def classes():
         return redirect(url_for('classes'))
     annees = AnneeScolaire.query.all()
     classes = Classe.query.all()
-    content = '''
+    content = """
         <h2>Classes</h2>
         <form method="post" class="form-inline">
             <input type="text" name="nom" placeholder="Ex: 3ème A" required>
@@ -429,8 +430,9 @@ def classes():
             </li>
         {% endfor %}
         </ul>
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'), content=content, annees=annees, classes=classes)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, annees=annees, classes=classes)
 
 @app.route('/classe/supprimer/<int:id>')
 def supprimer_classe(id):
@@ -440,7 +442,6 @@ def supprimer_classe(id):
     flash('Classe supprimée.')
     return redirect(url_for('classes'))
 
-# --- Disciplines ---
 @app.route('/disciplines', methods=['GET', 'POST'])
 def disciplines():
     if request.method == 'POST':
@@ -452,7 +453,7 @@ def disciplines():
             flash('Discipline ajoutée.')
         return redirect(url_for('disciplines'))
     disciplines = Discipline.query.all()
-    content = '''
+    content = """
         <h2>Disciplines</h2>
         <form method="post" class="form-inline">
             <input type="text" name="nom" placeholder="Ex: Mathématiques" required>
@@ -465,8 +466,9 @@ def disciplines():
             </li>
         {% endfor %}
         </ul>
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'), content=content, disciplines=disciplines)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, disciplines=disciplines)
 
 @app.route('/discipline/supprimer/<int:id>')
 def supprimer_discipline(id):
@@ -476,7 +478,6 @@ def supprimer_discipline(id):
     flash('Discipline supprimée.')
     return redirect(url_for('disciplines'))
 
-# --- Coefficients ---
 @app.route('/coefficients', methods=['GET', 'POST'])
 def coefficients():
     if request.method == 'POST':
@@ -492,7 +493,7 @@ def coefficients():
     classes = Classe.query.all()
     disciplines = Discipline.query.all()
     coeffs = Coefficient.query.all()
-    content = '''
+    content = """
         <h2>Coefficients par classe</h2>
         <form method="post" class="form-inline">
             <select name="classe_id" required>
@@ -521,8 +522,9 @@ def coefficients():
             </tr>
             {% endfor %}
         </table>
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'), content=content, classes=classes, disciplines=disciplines, coeffs=coeffs)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, classes=classes, disciplines=disciplines, coeffs=coeffs)
 
 @app.route('/coefficient/supprimer/<int:id>')
 def supprimer_coefficient(id):
@@ -532,7 +534,6 @@ def supprimer_coefficient(id):
     flash('Coefficient supprimé.')
     return redirect(url_for('coefficients'))
 
-# --- Élèves ---
 @app.route('/eleves', methods=['GET', 'POST'])
 def eleves():
     if request.method == 'POST':
@@ -540,7 +541,6 @@ def eleves():
         prenom = request.form.get('prenom')
         classe_id = request.form.get('classe_id')
         if nom and prenom and classe_id:
-            # génération matricule simple
             count = Eleve.query.filter_by(classe_id=int(classe_id)).count() + 1
             matricule = f"{classe_id}-{count:04d}"
             eleve = Eleve(nom=nom, prenom=prenom, classe_id=int(classe_id), matricule=matricule)
@@ -550,7 +550,7 @@ def eleves():
         return redirect(url_for('eleves'))
     classes = Classe.query.all()
     eleves = Eleve.query.all()
-    content = '''
+    content = """
         <h2>Élèves</h2>
         <form method="post" class="form-inline">
             <input type="text" name="nom" placeholder="Nom" required>
@@ -575,8 +575,9 @@ def eleves():
             </tr>
             {% endfor %}
         </table>
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'), content=content, classes=classes, eleves=eleves)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE, classes=classes, eleves=eleves)
 
 @app.route('/eleve/supprimer/<int:id>')
 def supprimer_eleve(id):
@@ -586,31 +587,26 @@ def supprimer_eleve(id):
     flash('Élève supprimé.')
     return redirect(url_for('eleves'))
 
-# --- Saisie des notes ---
 @app.route('/notes', methods=['GET', 'POST'])
 def notes():
-    # Sélectionner année, classe, trimestre, discipline
     annees = AnneeScolaire.query.all()
     classes = Classe.query.all()
     trimestres = Trimestre.query.all()
     disciplines = Discipline.query.all()
     eleves = []
-
     annee_id = request.args.get('annee_id', type=int)
     classe_id = request.args.get('classe_id', type=int)
     trimestre_id = request.args.get('trimestre_id', type=int)
     discipline_id = request.args.get('discipline_id', type=int)
+    devoir = None
+    examen = None
 
     if request.method == 'POST':
-        # Récupérer les données du formulaire
         annee_id = request.form.get('annee_id', type=int)
         classe_id = request.form.get('classe_id', type=int)
         trimestre_id = request.form.get('trimestre_id', type=int)
         discipline_id = request.form.get('discipline_id', type=int)
-        # S'il y a des notes devoir et examen
         if annee_id and classe_id and trimestre_id and discipline_id:
-            # Vérifier s'il existe un devoir et un examen pour ce couple; sinon en créer.
-            # On va chercher ou créer le devoir pour cette combinaison.
             devoir = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
             if not devoir:
                 devoir = Devoir(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id)
@@ -621,7 +617,6 @@ def notes():
                 examen = Examen(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id)
                 db.session.add(examen)
                 db.session.commit()
-            # Traiter les notes des élèves
             eleves_classe = Eleve.query.filter_by(classe_id=classe_id).all()
             for eleve in eleves_classe:
                 note_devoir = request.form.get(f'dev_{eleve.id}')
@@ -644,11 +639,13 @@ def notes():
             flash('Notes enregistrées.')
             return redirect(url_for('notes', annee_id=annee_id, classe_id=classe_id, trimestre_id=trimestre_id, discipline_id=discipline_id))
 
-    # Préparer la liste des élèves pour affichage
     if classe_id:
         eleves = Eleve.query.filter_by(classe_id=classe_id).all()
+    if classe_id and trimestre_id and discipline_id:
+        devoir = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
+        examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
 
-    content = '''
+    content = """
         <h2>Saisie des notes</h2>
         <form method="get" class="form-inline" action="{{ url_for('notes') }}">
             <select name="annee_id" required>
@@ -690,28 +687,24 @@ def notes():
                     <tr>
                         <td>{{ eleve.prenom }} {{ eleve.nom }}</td>
                         <td><input type="number" step="0.5" name="dev_{{ eleve.id }}" 
-                               value="{% set nd = eleve.notes_devoir.filter_by(devoir_id=devoir.id).first() %}{% if nd %}{{ nd.valeur }}{% endif %}"></td>
+                               value="{% if devoir and eleve.notes_devoir.filter_by(devoir_id=devoir.id).first() %}{{ eleve.notes_devoir.filter_by(devoir_id=devoir.id).first().valeur }}{% endif %}"></td>
                         <td><input type="number" step="0.5" name="exam_{{ eleve.id }}"
-                               value="{% set ne = eleve.notes_examen.filter_by(examen_id=examen.id).first() %}{% if ne %}{{ ne.valeur }}{% endif %}"></td>
+                               value="{% if examen and eleve.notes_examen.filter_by(examen_id=examen.id).first() %}{{ eleve.notes_examen.filter_by(examen_id=examen.id).first().valeur }}{% endif %}"></td>
                     </tr>
                     {% endfor %}
                 </table>
                 <button type="submit" class="btn">Enregistrer</button>
             </form>
         {% endif %}
-    '''
-    # On doit passer les variables 'devoir' et 'examen' pour les valeurs pré-remplies
-    devoir = None
-    examen = None
-    if classe_id and trimestre_id and discipline_id:
-        devoir = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
-        examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'),
-                                   content=content, annees=annees, classes=classes, trimestres=trimestres,
-                                   disciplines=disciplines, eleves=eleves, annee_id=annee_id, classe_id=classe_id,
-                                   trimestre_id=trimestre_id, discipline_id=discipline_id, devoir=devoir, examen=examen)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE,
+                                   annees=annees, classes=classes, trimestres=trimestres,
+                                   disciplines=disciplines, eleves=eleves,
+                                   annee_id=annee_id, classe_id=classe_id,
+                                   trimestre_id=trimestre_id, discipline_id=discipline_id,
+                                   devoir=devoir, examen=examen)
 
-# --- Bulletins ---
 @app.route('/bulletins', methods=['GET'])
 def bulletins():
     annees = AnneeScolaire.query.all()
@@ -721,11 +714,11 @@ def bulletins():
     annee_id = request.args.get('annee_id', type=int)
     classe_id = request.args.get('classe_id', type=int)
     trimestre_id = request.args.get('trimestre_id', type=int)
-    type_bulletin = request.args.get('type', 'trimestre')  # 'trimestre' ou 'annuel'
+    type_bulletin = request.args.get('type', 'trimestre')
     if classe_id:
         eleves = Eleve.query.filter_by(classe_id=classe_id).all()
 
-    content = '''
+    content = """
         <h2>Bulletins</h2>
         <form method="get" class="form-inline" action="{{ url_for('bulletins') }}">
             <select name="annee_id" required>
@@ -767,11 +760,12 @@ def bulletins():
             {% endfor %}
             </ul>
         {% endif %}
-    '''
-    return render_template_string(BASE_TEMPLATE.replace('{% block content %}{% endblock %}', '{{ content|safe }}'),
-                                   content=content, annees=annees, classes=classes, trimestres=trimestres,
-                                   eleves=eleves, annee_id=annee_id, classe_id=classe_id, trimestre_id=trimestre_id,
-                                   type_bulletin=type_bulletin)
+    """
+    full_template = "{% extends BASE_TEMPLATE %}{% block content %}" + content + "{% endblock %}"
+    return render_template_string(full_template, BASE_TEMPLATE=BASE_TEMPLATE,
+                                   annees=annees, classes=classes, trimestres=trimestres,
+                                   eleves=eleves, annee_id=annee_id, classe_id=classe_id,
+                                   trimestre_id=trimestre_id, type_bulletin=type_bulletin)
 
 @app.route('/bulletin_pdf/<int:eleve_id>/<int:trimestre_id>')
 def generer_bulletin_pdf(eleve_id, trimestre_id):
@@ -791,26 +785,9 @@ def generer_bulletin_annuel_pdf(eleve_id):
     pdf_buffer = generer_pdf_bulletin(data, 'annuel')
     return send_file(pdf_buffer, as_attachment=True, download_name=f"bulletin_annuel_{eleve_id}.pdf", mimetype='application/pdf')
 
-# --- Initialisation de la base (création des trimestres par défaut) ---
-# --- Supprimer complètement ces lignes :
-# @app.before_first_request
-# def create_trimestres():
-#     ...
-
-# --- Et les remplacer par ceci :
-
-def init_trimestres():
-    """Crée les trimestres par défaut pour toutes les années existantes."""
-    with app.app_context():
-        annees = AnneeScolaire.query.all()
-        for annee in annees:
-            for ordre, nom in [(1, 'T1'), (2, 'T2'), (3, 'T3')]:
-                if not Trimestre.query.filter_by(annee_id=annee.id, ordre=ordre).first():
-                    trim = Trimestre(nom=nom, ordre=ordre, annee_id=annee.id)
-                    db.session.add(trim)
-            db.session.commit()
-        print("Trimestres initialisés avec succès.")
+# --- Lancement ---
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        init_trimestres()
     app.run(debug=True)
