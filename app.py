@@ -792,18 +792,24 @@ def generer_bulletin_annuel_pdf(eleve_id):
     return send_file(pdf_buffer, as_attachment=True, download_name=f"bulletin_annuel_{eleve_id}.pdf", mimetype='application/pdf')
 
 # --- Initialisation de la base (création des trimestres par défaut) ---
-@app.before_first_request
-def create_trimestres():
-    # Si aucun trimestre n'existe, en créer par défaut pour les années déjà présentes
-    if Trimestre.query.count() == 0:
+# --- Supprimer complètement ces lignes :
+# @app.before_first_request
+# def create_trimestres():
+#     ...
+
+# --- Et les remplacer par ceci :
+
+def init_trimestres():
+    """Crée les trimestres par défaut pour toutes les années existantes."""
+    with app.app_context():
         annees = AnneeScolaire.query.all()
         for annee in annees:
             for ordre, nom in [(1, 'T1'), (2, 'T2'), (3, 'T3')]:
                 if not Trimestre.query.filter_by(annee_id=annee.id, ordre=ordre).first():
                     trim = Trimestre(nom=nom, ordre=ordre, annee_id=annee.id)
                     db.session.add(trim)
-        db.session.commit()
-
+            db.session.commit()
+        print("Trimestres initialisés avec succès.")
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
