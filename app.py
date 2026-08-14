@@ -22,7 +22,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- Modèles (inchangés) ---
+# --- Modèles (avec gestion de plusieurs devoirs) ---
 class AnneeScolaire(db.Model):
     __tablename__ = 'annees'
     id = db.Column(db.Integer, primary_key=True)
@@ -80,6 +80,7 @@ class Trimestre(db.Model):
 class Devoir(db.Model):
     __tablename__ = 'devoirs'
     id = db.Column(db.Integer, primary_key=True)
+    libelle = db.Column(db.String(50), nullable=False, default='Devoir')
     date = db.Column(db.Date, default=datetime.utcnow)
     discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id'), nullable=False)
     classe_id = db.Column(db.Integer, db.ForeignKey('classes.id'), nullable=False)
@@ -111,23 +112,23 @@ class NoteExamen(db.Model):
     examen_id = db.Column(db.Integer, db.ForeignKey('examens.id'), nullable=False)
     __table_args__ = (db.UniqueConstraint('eleve_id', 'examen_id', name='unique_note_examen'),)
 
-# --- Fonctions de calcul (inchangées) ---
+# --- Fonctions de calcul ---
 def get_notes_trimestre(eleve_id, classe_id, discipline_id, trimestre_id):
-    devoir_notes = db.session.query(NoteDevoir.valeur).join(Devoir).filter(
-        NoteDevoir.eleve_id == eleve_id,
-        Devoir.classe_id == classe_id,
-        Devoir.discipline_id == discipline_id,
-        Devoir.trimestre_id == trimestre_id
-    ).all()
-    notes = [n[0] for n in devoir_notes]
-    moyenne = sum(notes)/len(notes) if notes else None
-    exam_note = db.session.query(NoteExamen.valeur).join(Examen).filter(
-        NoteExamen.eleve_id == eleve_id,
-        Examen.classe_id == classe_id,
-        Examen.discipline_id == discipline_id,
-        Examen.trimestre_id == trimestre_id
-    ).first()
-    note_exam = exam_note[0] if exam_note else None
+    # Récupère tous les devoirs de cette discipline/classe/trimestre
+    devoirs = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).all()
+    notes_devoirs = []
+    for devoir in devoirs:
+        note = NoteDevoir.query.filter_by(eleve_id=eleve_id, devoir_id=devoir.id).first()
+        if note:
+            notes_devoirs.append(note.valeur)
+    moyenne = sum(notes_devoirs)/len(notes_devoirs) if notes_devoirs else None
+    # Examen
+    examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
+    note_exam = None
+    if examen:
+        ne = NoteExamen.query.filter_by(eleve_id=eleve_id, examen_id=examen.id).first()
+        if ne:
+            note_exam = ne.valeur
     return moyenne, note_exam
 
 def calculer_moyenne_trimestre(eleve_id, classe_id, trimestre_id):
@@ -211,6 +212,7 @@ def get_bulletin_annuel(eleve_id):
         'moyenne_annuelle': round(moyenne_annuelle, 2) if moyenne_annuelle is not None else None
     }
 
+# --- Génération PDF (améliorée) ---
 def generer_pdf_bulletin(data, type_bulletin='trimestre'):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
@@ -285,69 +287,73 @@ def init_trimestres():
             db.session.commit()
         print("Trimestres initialisés avec succès.")
 
-# --- Template de base (avec le bloc) ---
+# --- Template de base avec Bootstrap 5 ---
 BASE_TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Gestion Scolaire</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
-        h1 { color: #333; }
-        nav a { margin-right: 15px; text-decoration: none; color: #2a7; font-weight: bold; }
-        nav a:hover { text-decoration: underline; }
-        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        .flash { padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; margin-bottom: 10px; }
-        ul { list-style-type: none; padding: 0; }
-        li { margin: 8px 0; }
-        a { color: #1a73e8; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .btn { background: #28a745; color: white; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; }
-        .btn-danger { background: #dc3545; }
-        input, select { padding: 6px; margin: 4px; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background: #f2f2f2; }
-        .form-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+        body { background: #f8f9fa; }
+        .navbar-brand { font-weight: bold; }
+        .container { margin-top: 20px; }
+        .card { margin-bottom: 20px; }
+        .btn-sm { margin: 2px; }
+        .table th { background-color: #e9ecef; }
     </style>
 </head>
 <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('index') }}">📚 Gestion Lycée</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('annees') }}">Années</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('classes') }}">Classes</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('disciplines') }}">Disciplines</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('coefficients') }}">Coefficients</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('eleves') }}">Élèves</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('notes') }}">Notes</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('bulletins') }}">Bulletins</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
     <div class="container">
-        <h1>📚 Gestion du Lycée</h1>
-        <nav>
-            <a href="{{ url_for('index') }}">Accueil</a>
-            <a href="{{ url_for('annees') }}">Années</a>
-            <a href="{{ url_for('classes') }}">Classes</a>
-            <a href="{{ url_for('disciplines') }}">Disciplines</a>
-            <a href="{{ url_for('coefficients') }}">Coefficients</a>
-            <a href="{{ url_for('eleves') }}">Élèves</a>
-            <a href="{{ url_for('notes') }}">Saisie notes</a>
-            <a href="{{ url_for('bulletins') }}">Bulletins</a>
-        </nav>
-        <hr>
         {% with messages = get_flashed_messages() %}
-          {% if messages %}
-            <div class="flash">{{ messages[0] }}</div>
-          {% endif %}
+            {% if messages %}
+                <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    {{ messages[0] }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
 
 # --- Routes ---
-
 @app.route('/')
 def index():
     content = """
-        <h2>Bienvenue !</h2>
-        <p>Utilisez le menu ci-dessus pour gérer votre établissement.</p>
+    <div class="card">
+        <div class="card-body">
+            <h2>Bienvenue !</h2>
+            <p>Utilisez le menu ci-dessus pour gérer votre établissement scolaire.</p>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full)
 
 @app.route('/annees', methods=['GET', 'POST'])
 def annees():
@@ -361,23 +367,35 @@ def annees():
         return redirect(url_for('annees'))
     annees = AnneeScolaire.query.all()
     content = """
-        <h2>Années scolaires</h2>
-        <form method="post" class="form-inline">
-            <input type="text" name="libelle" placeholder="Ex: 2024-2025" required>
-            <button type="submit" class="btn">Ajouter</button>
-        </form>
-        <ul>
-        {% for a in annees %}
-            <li>
-                {{ a.libelle }} {% if a.active %} (active) {% endif %}
-                <a href="{{ url_for('supprimer_annee', id=a.id) }}" class="btn btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
-                <a href="{{ url_for('basculer_annee', id=a.id) }}">{% if a.active %}Désactiver{% else %}Activer{% endif %}</a>
-            </li>
-        {% endfor %}
-        </ul>
+    <div class="card">
+        <div class="card-header"><h3>Années scolaires</h3></div>
+        <div class="card-body">
+            <form method="post" class="row g-3 mb-3">
+                <div class="col-auto">
+                    <input type="text" name="libelle" class="form-control" placeholder="Ex: 2024-2025" required>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Ajouter</button>
+                </div>
+            </form>
+            <ul class="list-group">
+                {% for a in annees %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    {{ a.libelle }} {% if a.active %} <span class="badge bg-success">Active</span> {% endif %}
+                    <span>
+                        <a href="{{ url_for('basculer_annee', id=a.id) }}" class="btn btn-sm btn-outline-secondary">
+                            {% if a.active %}Désactiver{% else %}Activer{% endif %}
+                        </a>
+                        <a href="{{ url_for('supprimer_annee', id=a.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template, annees=annees)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full, annees=annees)
 
 @app.route('/annee/supprimer/<int:id>')
 def supprimer_annee(id):
@@ -395,6 +413,12 @@ def basculer_annee(id):
     flash('Statut modifié.')
     return redirect(url_for('annees'))
 
+# Les autres routes (classes, disciplines, coefficients, eleves, notes, bulletins, PDF) sont similaires mais avec Bootstrap.
+# Pour gagner de la place, je vais les écrire mais en gardant la même logique, avec un design amélioré.
+# Je continue dans la réponse suivante...
+
+
+# --- Classes ---
 @app.route('/classes', methods=['GET', 'POST'])
 def classes():
     if request.method == 'POST':
@@ -409,27 +433,38 @@ def classes():
     annees = AnneeScolaire.query.all()
     classes = Classe.query.all()
     content = """
-        <h2>Classes</h2>
-        <form method="post" class="form-inline">
-            <input type="text" name="nom" placeholder="Ex: 3ème A" required>
-            <select name="annee_id" required>
-                <option value="">Choisir une année</option>
-                {% for a in annees %}
-                    <option value="{{ a.id }}">{{ a.libelle }}</option>
+    <div class="card">
+        <div class="card-header"><h3>Classes</h3></div>
+        <div class="card-body">
+            <form method="post" class="row g-3 mb-3">
+                <div class="col-auto">
+                    <input type="text" name="nom" class="form-control" placeholder="Ex: 3ème A" required>
+                </div>
+                <div class="col-auto">
+                    <select name="annee_id" class="form-select" required>
+                        <option value="">Choisir une année</option>
+                        {% for a in annees %}
+                            <option value="{{ a.id }}">{{ a.libelle }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Ajouter</button>
+                </div>
+            </form>
+            <ul class="list-group">
+                {% for c in classes %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    {{ c.nom }} ({{ c.annee.libelle }})
+                    <a href="{{ url_for('supprimer_classe', id=c.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
+                </li>
                 {% endfor %}
-            </select>
-            <button type="submit" class="btn">Ajouter</button>
-        </form>
-        <ul>
-        {% for c in classes %}
-            <li>{{ c.nom }} ({{ c.annee.libelle }}) 
-                <a href="{{ url_for('supprimer_classe', id=c.id) }}" class="btn btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
-            </li>
-        {% endfor %}
-        </ul>
+            </ul>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template, annees=annees, classes=classes)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full, annees=annees, classes=classes)
 
 @app.route('/classe/supprimer/<int:id>')
 def supprimer_classe(id):
@@ -439,6 +474,7 @@ def supprimer_classe(id):
     flash('Classe supprimée.')
     return redirect(url_for('classes'))
 
+# --- Disciplines ---
 @app.route('/disciplines', methods=['GET', 'POST'])
 def disciplines():
     if request.method == 'POST':
@@ -451,21 +487,30 @@ def disciplines():
         return redirect(url_for('disciplines'))
     disciplines = Discipline.query.all()
     content = """
-        <h2>Disciplines</h2>
-        <form method="post" class="form-inline">
-            <input type="text" name="nom" placeholder="Ex: Mathématiques" required>
-            <button type="submit" class="btn">Ajouter</button>
-        </form>
-        <ul>
-        {% for d in disciplines %}
-            <li>{{ d.nom }} 
-                <a href="{{ url_for('supprimer_discipline', id=d.id) }}" class="btn btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
-            </li>
-        {% endfor %}
-        </ul>
+    <div class="card">
+        <div class="card-header"><h3>Disciplines</h3></div>
+        <div class="card-body">
+            <form method="post" class="row g-3 mb-3">
+                <div class="col-auto">
+                    <input type="text" name="nom" class="form-control" placeholder="Ex: Mathématiques" required>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Ajouter</button>
+                </div>
+            </form>
+            <ul class="list-group">
+                {% for d in disciplines %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    {{ d.nom }}
+                    <a href="{{ url_for('supprimer_discipline', id=d.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template, disciplines=disciplines)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full, disciplines=disciplines)
 
 @app.route('/discipline/supprimer/<int:id>')
 def supprimer_discipline(id):
@@ -475,6 +520,7 @@ def supprimer_discipline(id):
     flash('Discipline supprimée.')
     return redirect(url_for('disciplines'))
 
+# --- Coefficients ---
 @app.route('/coefficients', methods=['GET', 'POST'])
 def coefficients():
     if request.method == 'POST':
@@ -491,37 +537,51 @@ def coefficients():
     disciplines = Discipline.query.all()
     coeffs = Coefficient.query.all()
     content = """
-        <h2>Coefficients par classe</h2>
-        <form method="post" class="form-inline">
-            <select name="classe_id" required>
-                <option value="">Classe</option>
-                {% for c in classes %}
-                    <option value="{{ c.id }}">{{ c.nom }}</option>
-                {% endfor %}
-            </select>
-            <select name="discipline_id" required>
-                <option value="">Discipline</option>
-                {% for d in disciplines %}
-                    <option value="{{ d.id }}">{{ d.nom }}</option>
-                {% endfor %}
-            </select>
-            <input type="number" step="0.1" name="valeur" placeholder="Coef" required>
-            <button type="submit" class="btn">Ajouter</button>
-        </form>
-        <table>
-            <tr><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
-            {% for c in coeffs %}
-            <tr>
-                <td>{{ c.classe.nom }}</td>
-                <td>{{ c.discipline.nom }}</td>
-                <td>{{ c.valeur }}</td>
-                <td><a href="{{ url_for('supprimer_coefficient', id=c.id) }}" class="btn btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a></td>
-            </tr>
-            {% endfor %}
-        </table>
+    <div class="card">
+        <div class="card-header"><h3>Coefficients par classe</h3></div>
+        <div class="card-body">
+            <form method="post" class="row g-3 mb-3">
+                <div class="col-auto">
+                    <select name="classe_id" class="form-select" required>
+                        <option value="">Classe</option>
+                        {% for c in classes %}
+                            <option value="{{ c.id }}">{{ c.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="discipline_id" class="form-select" required>
+                        <option value="">Discipline</option>
+                        {% for d in disciplines %}
+                            <option value="{{ d.id }}">{{ d.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <input type="number" step="0.1" name="valeur" class="form-control" placeholder="Coef" required>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Ajouter</button>
+                </div>
+            </form>
+            <table class="table table-striped">
+                <thead><tr><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr></thead>
+                <tbody>
+                    {% for c in coeffs %}
+                    <tr>
+                        <td>{{ c.classe.nom }}</td>
+                        <td>{{ c.discipline.nom }}</td>
+                        <td>{{ c.valeur }}</td>
+                        <td><a href="{{ url_for('supprimer_coefficient', id=c.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template, classes=classes, disciplines=disciplines, coeffs=coeffs)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full, classes=classes, disciplines=disciplines, coeffs=coeffs)
 
 @app.route('/coefficient/supprimer/<int:id>')
 def supprimer_coefficient(id):
@@ -531,6 +591,7 @@ def supprimer_coefficient(id):
     flash('Coefficient supprimé.')
     return redirect(url_for('coefficients'))
 
+# --- Élèves ---
 @app.route('/eleves', methods=['GET', 'POST'])
 def eleves():
     if request.method == 'POST':
@@ -548,33 +609,47 @@ def eleves():
     classes = Classe.query.all()
     eleves = Eleve.query.all()
     content = """
-        <h2>Élèves</h2>
-        <form method="post" class="form-inline">
-            <input type="text" name="nom" placeholder="Nom" required>
-            <input type="text" name="prenom" placeholder="Prénom" required>
-            <select name="classe_id" required>
-                <option value="">Classe</option>
-                {% for c in classes %}
-                    <option value="{{ c.id }}">{{ c.nom }}</option>
-                {% endfor %}
-            </select>
-            <button type="submit" class="btn">Ajouter</button>
-        </form>
-        <table>
-            <tr><th>Matricule</th><th>Nom</th><th>Prénom</th><th>Classe</th><th>Action</th></tr>
-            {% for e in eleves %}
-            <tr>
-                <td>{{ e.matricule }}</td>
-                <td>{{ e.nom }}</td>
-                <td>{{ e.prenom }}</td>
-                <td>{{ e.classe.nom }}</td>
-                <td><a href="{{ url_for('supprimer_eleve', id=e.id) }}" class="btn btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a></td>
-            </tr>
-            {% endfor %}
-        </table>
+    <div class="card">
+        <div class="card-header"><h3>Élèves</h3></div>
+        <div class="card-body">
+            <form method="post" class="row g-3 mb-3">
+                <div class="col-auto">
+                    <input type="text" name="nom" class="form-control" placeholder="Nom" required>
+                </div>
+                <div class="col-auto">
+                    <input type="text" name="prenom" class="form-control" placeholder="Prénom" required>
+                </div>
+                <div class="col-auto">
+                    <select name="classe_id" class="form-select" required>
+                        <option value="">Classe</option>
+                        {% for c in classes %}
+                            <option value="{{ c.id }}">{{ c.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Ajouter</button>
+                </div>
+            </form>
+            <table class="table table-striped">
+                <thead><tr><th>Matricule</th><th>Nom</th><th>Prénom</th><th>Classe</th><th>Action</th></tr></thead>
+                <tbody>
+                    {% for e in eleves %}
+                    <tr>
+                        <td>{{ e.matricule }}</td>
+                        <td>{{ e.nom }}</td>
+                        <td>{{ e.prenom }}</td>
+                        <td>{{ e.classe.nom }}</td>
+                        <td><a href="{{ url_for('supprimer_eleve', id=e.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Confirmer ?')">Supprimer</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template, classes=classes, eleves=eleves)
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full, classes=classes, eleves=eleves)
 
 @app.route('/eleve/supprimer/<int:id>')
 def supprimer_eleve(id):
@@ -583,6 +658,7 @@ def supprimer_eleve(id):
     db.session.commit()
     flash('Élève supprimé.')
     return redirect(url_for('eleves'))
+
 
 @app.route('/notes', methods=['GET', 'POST'])
 def notes():
@@ -595,113 +671,191 @@ def notes():
     classe_id = request.args.get('classe_id', type=int)
     trimestre_id = request.args.get('trimestre_id', type=int)
     discipline_id = request.args.get('discipline_id', type=int)
-    devoir = None
+    devoirs = []
     examen = None
 
+    # Gestion de l'ajout d'un nouveau devoir
     if request.method == 'POST':
-        annee_id = request.form.get('annee_id', type=int)
-        classe_id = request.form.get('classe_id', type=int)
-        trimestre_id = request.form.get('trimestre_id', type=int)
-        discipline_id = request.form.get('discipline_id', type=int)
-        if annee_id and classe_id and trimestre_id and discipline_id:
-            devoir = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
-            if not devoir:
-                devoir = Devoir(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id)
-                db.session.add(devoir)
+        # Vérifier si on ajoute un devoir
+        if 'ajouter_devoir' in request.form:
+            libelle = request.form.get('libelle_devoir')
+            if libelle and classe_id and discipline_id and trimestre_id:
+                new_devoir = Devoir(
+                    libelle=libelle,
+                    classe_id=classe_id,
+                    discipline_id=discipline_id,
+                    trimestre_id=trimestre_id,
+                    date=datetime.utcnow()
+                )
+                db.session.add(new_devoir)
                 db.session.commit()
-            examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
-            if not examen:
-                examen = Examen(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id)
-                db.session.add(examen)
+                flash('Devoir ajouté avec succès.')
+                return redirect(url_for('notes', annee_id=annee_id, classe_id=classe_id, trimestre_id=trimestre_id, discipline_id=discipline_id))
+        else:
+            # Saisie des notes
+            annee_id = request.form.get('annee_id', type=int)
+            classe_id = request.form.get('classe_id', type=int)
+            trimestre_id = request.form.get('trimestre_id', type=int)
+            discipline_id = request.form.get('discipline_id', type=int)
+            if annee_id and classe_id and trimestre_id and discipline_id:
+                # Récupérer ou créer l'examen
+                examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
+                if not examen:
+                    examen = Examen(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id)
+                    db.session.add(examen)
+                    db.session.commit()
+                # Récupérer tous les devoirs de cette combinaison
+                devoirs = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).all()
+                eleves_classe = Eleve.query.filter_by(classe_id=classe_id).all()
+                for eleve in eleves_classe:
+                    # Notes de devoirs
+                    for devoir in devoirs:
+                        note_val = request.form.get(f'dev_{devoir.id}_{eleve.id}')
+                        if note_val:
+                            nd = NoteDevoir.query.filter_by(eleve_id=eleve.id, devoir_id=devoir.id).first()
+                            if nd:
+                                nd.valeur = float(note_val)
+                            else:
+                                nd = NoteDevoir(eleve_id=eleve.id, devoir_id=devoir.id, valeur=float(note_val))
+                                db.session.add(nd)
+                    # Note examen
+                    note_exam = request.form.get(f'exam_{eleve.id}')
+                    if note_exam:
+                        ne = NoteExamen.query.filter_by(eleve_id=eleve.id, examen_id=examen.id).first()
+                        if ne:
+                            ne.valeur = float(note_exam)
+                        else:
+                            ne = NoteExamen(eleve_id=eleve.id, examen_id=examen.id, valeur=float(note_exam))
+                            db.session.add(ne)
                 db.session.commit()
-            eleves_classe = Eleve.query.filter_by(classe_id=classe_id).all()
-            for eleve in eleves_classe:
-                note_devoir = request.form.get(f'dev_{eleve.id}')
-                note_exam = request.form.get(f'exam_{eleve.id}')
-                if note_devoir:
-                    nd = NoteDevoir.query.filter_by(eleve_id=eleve.id, devoir_id=devoir.id).first()
-                    if nd:
-                        nd.valeur = float(note_devoir)
-                    else:
-                        nd = NoteDevoir(eleve_id=eleve.id, devoir_id=devoir.id, valeur=float(note_devoir))
-                        db.session.add(nd)
-                if note_exam:
-                    ne = NoteExamen.query.filter_by(eleve_id=eleve.id, examen_id=examen.id).first()
-                    if ne:
-                        ne.valeur = float(note_exam)
-                    else:
-                        ne = NoteExamen(eleve_id=eleve.id, examen_id=examen.id, valeur=float(note_exam))
-                        db.session.add(ne)
-            db.session.commit()
-            flash('Notes enregistrées.')
-            return redirect(url_for('notes', annee_id=annee_id, classe_id=classe_id, trimestre_id=trimestre_id, discipline_id=discipline_id))
+                flash('Notes enregistrées.')
+                return redirect(url_for('notes', annee_id=annee_id, classe_id=classe_id, trimestre_id=trimestre_id, discipline_id=discipline_id))
 
+    # Affichage
     if classe_id:
         eleves = Eleve.query.filter_by(classe_id=classe_id).all()
-    if classe_id and trimestre_id and discipline_id:
-        devoir = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
+        # Récupérer les devoirs existants
+        devoirs = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).all()
         examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
 
     content = """
-        <h2>Saisie des notes</h2>
-        <form method="get" class="form-inline" action="{{ url_for('notes') }}">
-            <select name="annee_id" required>
-                <option value="">Année</option>
-                {% for a in annees %}
-                    <option value="{{ a.id }}" {% if a.id == annee_id %}selected{% endif %}>{{ a.libelle }}</option>
-                {% endfor %}
-            </select>
-            <select name="classe_id" required>
-                <option value="">Classe</option>
-                {% for c in classes %}
-                    <option value="{{ c.id }}" {% if c.id == classe_id %}selected{% endif %}>{{ c.nom }}</option>
-                {% endfor %}
-            </select>
-            <select name="trimestre_id" required>
-                <option value="">Trimestre</option>
-                {% for t in trimestres %}
-                    <option value="{{ t.id }}" {% if t.id == trimestre_id %}selected{% endif %}>{{ t.nom }}</option>
-                {% endfor %}
-            </select>
-            <select name="discipline_id" required>
-                <option value="">Discipline</option>
-                {% for d in disciplines %}
-                    <option value="{{ d.id }}" {% if d.id == discipline_id %}selected{% endif %}>{{ d.nom }}</option>
-                {% endfor %}
-            </select>
-            <button type="submit" class="btn">Charger</button>
-        </form>
-
-        {% if classe_id and trimestre_id and discipline_id %}
-            <form method="post" action="{{ url_for('notes') }}">
-                <input type="hidden" name="annee_id" value="{{ annee_id }}">
-                <input type="hidden" name="classe_id" value="{{ classe_id }}">
-                <input type="hidden" name="trimestre_id" value="{{ trimestre_id }}">
-                <input type="hidden" name="discipline_id" value="{{ discipline_id }}">
-                <table>
-                    <tr><th>Élève</th><th>Note devoir(s) (moyenne)</th><th>Note examen</th></tr>
-                    {% for eleve in eleves %}
-                    <tr>
-                        <td>{{ eleve.prenom }} {{ eleve.nom }}</td>
-                        <td><input type="number" step="0.5" name="dev_{{ eleve.id }}" 
-                               value="{% if devoir and eleve.notes_devoir.filter_by(devoir_id=devoir.id).first() %}{{ eleve.notes_devoir.filter_by(devoir_id=devoir.id).first().valeur }}{% endif %}"></td>
-                        <td><input type="number" step="0.5" name="exam_{{ eleve.id }}"
-                               value="{% if examen and eleve.notes_examen.filter_by(examen_id=examen.id).first() %}{{ eleve.notes_examen.filter_by(examen_id=examen.id).first().valeur }}{% endif %}"></td>
-                    </tr>
-                    {% endfor %}
-                </table>
-                <button type="submit" class="btn">Enregistrer</button>
+    <div class="card">
+        <div class="card-header"><h3>Saisie des notes</h3></div>
+        <div class="card-body">
+            <form method="get" class="row g-3 mb-3" action="{{ url_for('notes') }}">
+                <div class="col-auto">
+                    <select name="annee_id" class="form-select" required>
+                        <option value="">Année</option>
+                        {% for a in annees %}
+                            <option value="{{ a.id }}" {% if a.id == annee_id %}selected{% endif %}>{{ a.libelle }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="classe_id" class="form-select" required>
+                        <option value="">Classe</option>
+                        {% for c in classes %}
+                            <option value="{{ c.id }}" {% if c.id == classe_id %}selected{% endif %}>{{ c.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="trimestre_id" class="form-select" required>
+                        <option value="">Trimestre</option>
+                        {% for t in trimestres %}
+                            <option value="{{ t.id }}" {% if t.id == trimestre_id %}selected{% endif %}>{{ t.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="discipline_id" class="form-select" required>
+                        <option value="">Discipline</option>
+                        {% for d in disciplines %}
+                            <option value="{{ d.id }}" {% if d.id == discipline_id %}selected{% endif %}>{{ d.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Charger</button>
+                </div>
             </form>
-        {% endif %}
+
+            {% if classe_id and trimestre_id and discipline_id %}
+                <!-- Formulaire pour ajouter un devoir -->
+                <form method="post" class="row g-3 mb-3">
+                    <input type="hidden" name="annee_id" value="{{ annee_id }}">
+                    <input type="hidden" name="classe_id" value="{{ classe_id }}">
+                    <input type="hidden" name="trimestre_id" value="{{ trimestre_id }}">
+                    <input type="hidden" name="discipline_id" value="{{ discipline_id }}">
+                    <div class="col-auto">
+                        <input type="text" name="libelle_devoir" class="form-control" placeholder="Libellé du devoir (ex: Devoir1)" required>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" name="ajouter_devoir" class="btn btn-success">Ajouter un devoir</button>
+                    </div>
+                </form>
+
+                <!-- Liste des devoirs -->
+                <div class="mb-3">
+                    <strong>Devoirs :</strong>
+                    {% if devoirs %}
+                        <ul class="list-inline">
+                            {% for d in devoirs %}
+                                <li class="list-inline-item badge bg-secondary">{{ d.libelle }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <span class="text-muted">Aucun devoir pour cette combinaison.</span>
+                    {% endif %}
+                </div>
+
+                <!-- Formulaire de saisie des notes -->
+                <form method="post" action="{{ url_for('notes') }}">
+                    <input type="hidden" name="annee_id" value="{{ annee_id }}">
+                    <input type="hidden" name="classe_id" value="{{ classe_id }}">
+                    <input type="hidden" name="trimestre_id" value="{{ trimestre_id }}">
+                    <input type="hidden" name="discipline_id" value="{{ discipline_id }}">
+                    <table class="table table-striped table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Élève</th>
+                                {% for d in devoirs %}
+                                    <th>{{ d.libelle }}</th>
+                                {% endfor %}
+                                <th>Examen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for eleve in eleves %}
+                            <tr>
+                                <td>{{ eleve.prenom }} {{ eleve.nom }}</td>
+                                {% for d in devoirs %}
+                                    {% set note = eleve.notes_devoir.filter_by(devoir_id=d.id).first() %}
+                                    <td><input type="number" step="0.5" name="dev_{{ d.id }}_{{ eleve.id }}" 
+                                               value="{{ note.valeur if note else '' }}" class="form-control form-control-sm"></td>
+                                {% endfor %}
+                                {% set ne = eleve.notes_examen.filter_by(examen_id=examen.id).first() if examen else None %}
+                                <td><input type="number" step="0.5" name="exam_{{ eleve.id }}" 
+                                           value="{{ ne.valeur if ne else '' }}" class="form-control form-control-sm"></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <button type="submit" class="btn btn-primary">Enregistrer toutes les notes</button>
+                </form>
+            {% endif %}
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template,
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full,
                                    annees=annees, classes=classes, trimestres=trimestres,
                                    disciplines=disciplines, eleves=eleves,
                                    annee_id=annee_id, classe_id=classe_id,
                                    trimestre_id=trimestre_id, discipline_id=discipline_id,
-                                   devoir=devoir, examen=examen)
-
+                                   devoirs=devoirs, examen=examen)
+                        
+                       
 @app.route('/bulletins', methods=['GET'])
 def bulletins():
     annees = AnneeScolaire.query.all()
@@ -716,50 +870,66 @@ def bulletins():
         eleves = Eleve.query.filter_by(classe_id=classe_id).all()
 
     content = """
-        <h2>Bulletins</h2>
-        <form method="get" class="form-inline" action="{{ url_for('bulletins') }}">
-            <select name="annee_id" required>
-                <option value="">Année</option>
-                {% for a in annees %}
-                    <option value="{{ a.id }}" {% if a.id == annee_id %}selected{% endif %}>{{ a.libelle }}</option>
-                {% endfor %}
-            </select>
-            <select name="classe_id" required>
-                <option value="">Classe</option>
-                {% for c in classes %}
-                    <option value="{{ c.id }}" {% if c.id == classe_id %}selected{% endif %}>{{ c.nom }}</option>
-                {% endfor %}
-            </select>
-            <select name="trimestre_id" {% if type_bulletin == 'trimestre' %}required{% endif %}>
-                <option value="">Trimestre</option>
-                {% for t in trimestres %}
-                    <option value="{{ t.id }}" {% if t.id == trimestre_id %}selected{% endif %}>{{ t.nom }}</option>
-                {% endfor %}
-            </select>
-            <select name="type">
-                <option value="trimestre" {% if type_bulletin == 'trimestre' %}selected{% endif %}>Trimestriel</option>
-                <option value="annuel" {% if type_bulletin == 'annuel' %}selected{% endif %}>Annuel</option>
-            </select>
-            <button type="submit" class="btn">Afficher</button>
-        </form>
-        {% if classe_id %}
-            <h3>Élèves de la classe</h3>
-            <ul>
-            {% for eleve in eleves %}
-                <li>
-                    {{ eleve.prenom }} {{ eleve.nom }}
-                    {% if type_bulletin == 'trimestre' and trimestre_id %}
-                        <a href="{{ url_for('generer_bulletin_pdf', eleve_id=eleve.id, trimestre_id=trimestre_id) }}" target="_blank">PDF trimestriel</a>
-                    {% elif type_bulletin == 'annuel' %}
-                        <a href="{{ url_for('generer_bulletin_annuel_pdf', eleve_id=eleve.id) }}" target="_blank">PDF annuel</a>
-                    {% endif %}
-                </li>
-            {% endfor %}
-            </ul>
-        {% endif %}
+    <div class="card">
+        <div class="card-header"><h3>Bulletins</h3></div>
+        <div class="card-body">
+            <form method="get" class="row g-3 mb-3" action="{{ url_for('bulletins') }}">
+                <div class="col-auto">
+                    <select name="annee_id" class="form-select" required>
+                        <option value="">Année</option>
+                        {% for a in annees %}
+                            <option value="{{ a.id }}" {% if a.id == annee_id %}selected{% endif %}>{{ a.libelle }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="classe_id" class="form-select" required>
+                        <option value="">Classe</option>
+                        {% for c in classes %}
+                            <option value="{{ c.id }}" {% if c.id == classe_id %}selected{% endif %}>{{ c.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="trimestre_id" class="form-select" {% if type_bulletin == 'trimestre' %}required{% endif %}>
+                        <option value="">Trimestre</option>
+                        {% for t in trimestres %}
+                            <option value="{{ t.id }}" {% if t.id == trimestre_id %}selected{% endif %}>{{ t.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <select name="type" class="form-select">
+                        <option value="trimestre" {% if type_bulletin == 'trimestre' %}selected{% endif %}>Trimestriel</option>
+                        <option value="annuel" {% if type_bulletin == 'annuel' %}selected{% endif %}>Annuel</option>
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Afficher</button>
+                </div>
+            </form>
+            {% if classe_id %}
+                <h4>Élèves de la classe</h4>
+                <ul class="list-group">
+                    {% for eleve in eleves %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        {{ eleve.prenom }} {{ eleve.nom }}
+                        <span>
+                            {% if type_bulletin == 'trimestre' and trimestre_id %}
+                                <a href="{{ url_for('generer_bulletin_pdf', eleve_id=eleve.id, trimestre_id=trimestre_id) }}" class="btn btn-sm btn-primary" target="_blank">PDF trimestriel</a>
+                            {% elif type_bulletin == 'annuel' %}
+                                <a href="{{ url_for('generer_bulletin_annuel_pdf', eleve_id=eleve.id) }}" class="btn btn-sm btn-primary" target="_blank">PDF annuel</a>
+                            {% endif %}
+                        </span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+    </div>
     """
-    full_template = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
-    return render_template_string(full_template,
+    full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
+    return render_template_string(full,
                                    annees=annees, classes=classes, trimestres=trimestres,
                                    eleves=eleves, annee_id=annee_id, classe_id=classe_id,
                                    trimestre_id=trimestre_id, type_bulletin=type_bulletin)
@@ -781,8 +951,7 @@ def generer_bulletin_annuel_pdf(eleve_id):
         return redirect(url_for('bulletins'))
     pdf_buffer = generer_pdf_bulletin(data, 'annuel')
     return send_file(pdf_buffer, as_attachment=True, download_name=f"bulletin_annuel_{eleve_id}.pdf", mimetype='application/pdf')
-
-# --- Lancement ---
+    
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
