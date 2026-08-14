@@ -434,28 +434,62 @@ def supprimer_discipline(id):
     flash('Discipline supprimée.')
     return redirect(url_for('disciplines'))
 
+@app# --- Coefficients ---
 @app.route('/coefficients', methods=['GET', 'POST'])
 def coefficients():
     if request.method == 'POST':
         classe_id = request.form.get('classe_id')
         discipline_id = request.form.get('discipline_id')
         coef_val = convertir_note(request.form.get('coef'))
+        
         if not classe_id or not discipline_id or coef_val is None:
             flash('Veuillez remplir tous les champs.')
         else:
-            if Coefficient.query.filter_by(classe_id=classe_id, discipline_id=discipline_id).first():
+            # Vérifier si le coefficient existe déjà
+            existant = Coefficient.query.filter_by(
+                classe_id=classe_id, 
+                discipline_id=discipline_id
+            ).first()
+            
+            if existant:
                 flash('Ce coefficient existe déjà pour cette classe et cette discipline.')
             else:
-                db.session.add(Coefficient(classe_id=classe_id, discipline_id=discipline_id, coef=coef_val))
-                db.session.commit()
-                flash('Coefficient enregistré.')
+                try:
+                    nouveau_coeff = Coefficient(
+                        classe_id=classe_id,
+                        discipline_id=discipline_id,
+                        coef=coef_val
+                    )
+                    db.session.add(nouveau_coeff)
+                    db.session.commit()
+                    flash('Coefficient enregistré avec succès.')
+                except Exception as e:
+                    db.session.rollback()
+                    flash(f'Erreur : {str(e)}')
+        
         return redirect(url_for('coefficients'))
 
+    # --- GET : Affichage ---
     classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
     disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
-    coefficients_liste = db.session.query(Coefficient).join(Classe, Classe.id == Coefficient.classe_id).join(
-        Annee, Annee.id == Classe.annee_id).join(Discipline, Discipline.id == Coefficient.discipline_id).order_by(
-        Annee.libelle.desc(), Classe.nom, Discipline.nom).all()
+    
+    # Requête pour les coefficients avec toutes les jointures
+    coefficients_liste = db.session.query(
+        Coefficient,
+        Classe,
+        Annee,
+        Discipline
+    ).join(
+        Classe, Classe.id == Coefficient.classe_id
+    ).join(
+        Annee, Annee.id == Classe.annee_id
+    ).join(
+        Discipline, Discipline.id == Coefficient.discipline_id
+    ).order_by(
+        Annee.libelle.desc(), 
+        Classe.nom, 
+        Discipline.nom
+    ).all()
 
     contenu = """
     <div class="card"><h2>Coefficients par classe</h2>
@@ -463,7 +497,7 @@ def coefficients():
         <div>
             <label>Classe</label>
             <select name="classe_id" required>
-                <option value="">Choisir</option>
+                <option value="">Choisir une classe</option>
                 {% for classe in classes_liste %}
                 <option value="{{ classe.id }}">
                     {{ classe.annee.libelle }} - {{ classe.nom }}
@@ -474,7 +508,7 @@ def coefficients():
         <div>
             <label>Discipline</label>
             <select name="discipline_id" required>
-                <option value="">Choisir</option>
+                <option value="">Choisir une discipline</option>
                 {% for discipline in disciplines_liste %}
                 <option value="{{ discipline.id }}">
                     {{ discipline.nom }}
@@ -486,21 +520,29 @@ def coefficients():
             <label>Coefficient</label>
             <input type="number" step="0.1" min="0.1" name="coef" placeholder="2.5" required>
         </div>
-        <button class="btn btn-success">Ajouter</button>
+        <button class="btn btn-success" type="submit">Ajouter</button>
     </form>
     </div>
 
     <div class="card"><h3>Coefficients existants</h3>
     <table>
-        <tr><th>Année</th><th>Classe</th><th>Discipline</th><th>Coefficient</th><th>Action</th></tr>
-        {% for cf in coefficients_liste %}
+        <tr>
+            <th>Année</th>
+            <th>Classe</th>
+            <th>Discipline</th>
+            <th>Coefficient</th>
+            <th>Action</th>
+        </tr>
+        {% for item in coefficients_liste %}
+        {% set cf = item[0] %}
         <tr>
             <td>{{ cf.classe.annee.libelle }}</td>
             <td>{{ cf.classe.nom }}</td>
             <td>{{ cf.discipline.nom }}</td>
             <td>{{ cf.coef }}</td>
             <td>
-                <a class="delete-cross" href="{{ url_for('supprimer_coefficient', id=cf.id) }}" onclick="return confirm('Supprimer ce coefficient ?')">×</a>
+                <a class="delete-cross" href="{{ url_for('supprimer_coefficient', id=cf.id) }}" 
+                   onclick="return confirm('Supprimer ce coefficient ?')">×</a>
             </td>
         </tr>
         {% else %}
@@ -509,15 +551,24 @@ def coefficients():
     </table>
     </div>
     """
-    return page(contenu, classes_liste=classes_liste, disciplines_liste=disciplines_liste, 
-               coefficients_liste=coefficients_liste)
+    
+    return page(contenu, 
+                classes_liste=classes_liste, 
+                disciplines_liste=disciplines_liste, 
+                coefficients_liste=coefficients_liste)
+
 
 @app.route('/coefficient/supprimer/<int:id>')
 def supprimer_coefficient(id):
-    coefficient = Coefficient.query.get_or_404(id)
-    db.session.delete(coefficient)
-    db.session.commit()
-    flash('Coefficient supprimé.')
+    try:
+        coefficient = Coefficient.query.get_or_404(id)
+        db.session.delete(coefficient)
+        db.session.commit()
+        flash('Coefficient supprimé avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur lors de la suppression : {str(e)}')
+    
     return redirect(url_for('coefficients'))
 # --- Trimestres ---
 @app.route('/trimestres', methods=['GET', 'POST'])
