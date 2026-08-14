@@ -660,21 +660,26 @@ def supprimer_eleve(id):
 # --- Route NOTES avec plusieurs devoirs (CORRIGÉE) ---
 @app.route('/notes', methods=['GET', 'POST'])
 def notes():
-    annees = AnneeScolaire.query.all()
-    classes = Classe.query.all()
-    trimestres = Trimestre.query.all()
-    disciplines = Discipline.query.all()
-    eleves = []
-    devoirs = []
-    examen = None
+    # Récupération des paramètres GET
     annee_id = request.args.get('annee_id', type=int)
     classe_id = request.args.get('classe_id', type=int)
     trimestre_id = request.args.get('trimestre_id', type=int)
     discipline_id = request.args.get('discipline_id', type=int)
 
+    # Objets pour les listes déroulantes
+    annees = AnneeScolaire.query.all()
+    classes = Classe.query.all()
+    trimestres = Trimestre.query.all()
+    disciplines = Discipline.query.all()
+
+    # Variables par défaut
+    eleves = []
+    devoirs = []
+    examen = None
+
     # Traitement POST (ajout de devoir ou sauvegarde des notes)
     if request.method == 'POST':
-        # Vérifier si c'est un ajout de devoir
+        # Ajout d'un devoir
         if 'ajouter_devoir' in request.form:
             libelle = request.form.get('libelle_devoir')
             a_id = request.form.get('annee_id', type=int)
@@ -734,12 +739,18 @@ def notes():
                 flash('Notes enregistrées.')
                 return redirect(url_for('notes', annee_id=a_id, classe_id=c_id, trimestre_id=t_id, discipline_id=d_id))
 
-    # Affichage GET
-    if classe_id:
+    # Traitement GET : si les 4 paramètres sont présents, on charge les données
+    if classe_id and trimestre_id and discipline_id:
         eleves = Eleve.query.filter_by(classe_id=classe_id).all()
         devoirs = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).all()
         examen = Examen.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).first()
+    else:
+        # Si un paramètre manque, on efface les listes pour éviter des erreurs
+        eleves = []
+        devoirs = []
+        examen = None
 
+    # Construction du template
     content = """
     <div class="card">
         <div class="card-header"><h3>Saisie des notes</h3></div>
@@ -852,6 +863,7 @@ def notes():
         </div>
     </div>
     """
+
     full = BASE_TEMPLATE.replace('{% block content %}{% endblock %}', content)
     return render_template_string(full,
                                    annees=annees, classes=classes, trimestres=trimestres,
