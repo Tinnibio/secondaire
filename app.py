@@ -434,7 +434,7 @@ def supprimer_discipline(id):
     flash('Discipline supprimée.')
     return redirect(url_for('disciplines'))
 
-@app# --- Coefficients ---
+# --- Coefficients ---
 @app.route('/coefficients', methods=['GET', 'POST'])
 def coefficients():
     if request.method == 'POST':
