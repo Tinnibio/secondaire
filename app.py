@@ -112,6 +112,22 @@ class NoteExamen(db.Model):
     examen_id = db.Column(db.Integer, db.ForeignKey('examens.id'), nullable=False)
     __table_args__ = (db.UniqueConstraint('eleve_id', 'examen_id', name='unique_note_examen'),)
 
+
+# --- Mise à jour automatique de la base de données ---
+def upgrade_database():
+    """Met à jour la base de données si des colonnes sont manquantes."""
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        # Vérifier si la table 'devoirs' existe
+        if 'devoirs' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('devoirs')]
+            if 'libelle' not in columns:
+                print("Ajout de la colonne 'libelle' à la table 'devoirs'...")
+                db.engine.execute('ALTER TABLE devoirs ADD COLUMN libelle VARCHAR(50) NOT NULL DEFAULT \'Devoir\'')
+                print("Colonne ajoutée avec succès.")
+
+
+
 # --- Fonctions de calcul ---
 def get_notes_trimestre(eleve_id, classe_id, discipline_id, trimestre_id):
     devoirs = Devoir.query.filter_by(classe_id=classe_id, discipline_id=discipline_id, trimestre_id=trimestre_id).all()
@@ -973,5 +989,6 @@ def generer_bulletin_annuel_pdf(eleve_id):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        upgrade_database()  # <-- AJOUTEZ CETTE LIGNE
         init_trimestres()
     app.run(debug=True)
