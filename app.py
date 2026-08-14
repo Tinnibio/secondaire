@@ -40,7 +40,7 @@ class Classe(db.Model):
     nom = db.Column(db.String(50), nullable=False)
     __table_args__ = (db.UniqueConstraint('annee_id', 'nom', name='unique_classe_annee'),)
     etudiants = db.relationship('Etudiant', backref='classe', lazy='dynamic', cascade='all, delete-orphan')
-    coefficients = db.relationship('Coefficient', backref='classe', lazy='dynamic', cascade='all, delete-orphan')
+    coefficients = db.relationship('Coefficient', backref='classe_ref', lazy='dynamic', cascade='all, delete-orphan')
 
 class Etudiant(db.Model):
     __tablename__ = 'etudiants'
@@ -54,7 +54,7 @@ class Discipline(db.Model):
     __tablename__ = 'disciplines'
     id = db.Column(db.Integer, primary_key=True)
     nom = db.Column(db.String(100), unique=True, nullable=False)
-    coefficients = db.relationship('Coefficient', backref='discipline', lazy='dynamic', cascade='all, delete-orphan')
+    coefficients = db.relationship('Coefficient', backref='discipline_ref', lazy='dynamic', cascade='all, delete-orphan')
     evaluations = db.relationship('Evaluation', backref='discipline', lazy='dynamic', cascade='all, delete-orphan')
 
 class Coefficient(db.Model):
@@ -64,6 +64,9 @@ class Coefficient(db.Model):
     discipline_id = db.Column(db.Integer, db.ForeignKey('disciplines.id', ondelete='CASCADE'), nullable=False)
     coef = db.Column(db.Float, nullable=False)
     __table_args__ = (db.UniqueConstraint('classe_id', 'discipline_id', name='unique_coeff_classe_discipline'),)
+    
+    classe = db.relationship('Classe', backref='coefficients_list')
+    discipline = db.relationship('Discipline', backref='coefficients_list')
 
 class Trimestre(db.Model):
     __tablename__ = 'trimestres'
@@ -295,10 +298,14 @@ def annees():
 
 @app.route('/annees/supprimer/<int:id>')
 def supprimer_annee(id):
-    annee = Annee.query.get_or_404(id)
-    db.session.delete(annee)
-    db.session.commit()
-    flash('Année supprimée.')
+    try:
+        annee = Annee.query.get_or_404(id)
+        db.session.delete(annee)
+        db.session.commit()
+        flash('Année supprimée avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('annees'))
 
 # --- Classes ---
@@ -376,10 +383,14 @@ def classes():
 
 @app.route('/classes/supprimer/<int:id>')
 def supprimer_classe(id):
-    classe = Classe.query.get_or_404(id)
-    db.session.delete(classe)
-    db.session.commit()
-    flash('Classe supprimée.')
+    try:
+        classe = Classe.query.get_or_404(id)
+        db.session.delete(classe)
+        db.session.commit()
+        flash('Classe supprimée avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('classes'))
 
 # --- Disciplines ---
@@ -428,10 +439,14 @@ def disciplines():
 
 @app.route('/disciplines/supprimer/<int:id>')
 def supprimer_discipline(id):
-    discipline = Discipline.query.get_or_404(id)
-    db.session.delete(discipline)
-    db.session.commit()
-    flash('Discipline supprimée.')
+    try:
+        discipline = Discipline.query.get_or_404(id)
+        db.session.delete(discipline)
+        db.session.commit()
+        flash('Discipline supprimée avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('disciplines'))
 
 # --- Coefficients ---
@@ -445,7 +460,6 @@ def coefficients():
         if not classe_id or not discipline_id or coef_val is None:
             flash('Veuillez remplir tous les champs.')
         else:
-            # Vérifier si le coefficient existe déjà
             existant = Coefficient.query.filter_by(
                 classe_id=classe_id, 
                 discipline_id=discipline_id
@@ -469,16 +483,11 @@ def coefficients():
         
         return redirect(url_for('coefficients'))
 
-    # --- GET : Affichage ---
     classes_liste = Classe.query.join(Annee).order_by(Annee.libelle.desc(), Classe.nom).all()
     disciplines_liste = Discipline.query.order_by(Discipline.nom).all()
     
-    # Requête pour les coefficients avec toutes les jointures
     coefficients_liste = db.session.query(
-        Coefficient,
-        Classe,
-        Annee,
-        Discipline
+        Coefficient
     ).join(
         Classe, Classe.id == Coefficient.classe_id
     ).join(
@@ -533,8 +542,7 @@ def coefficients():
             <th>Coefficient</th>
             <th>Action</th>
         </tr>
-        {% for item in coefficients_liste %}
-        {% set cf = item[0] %}
+        {% for cf in coefficients_liste %}
         <tr>
             <td>{{ cf.classe.annee.libelle }}</td>
             <td>{{ cf.classe.nom }}</td>
@@ -557,7 +565,6 @@ def coefficients():
                 disciplines_liste=disciplines_liste, 
                 coefficients_liste=coefficients_liste)
 
-
 @app.route('/coefficient/supprimer/<int:id>')
 def supprimer_coefficient(id):
     try:
@@ -567,9 +574,9 @@ def supprimer_coefficient(id):
         flash('Coefficient supprimé avec succès.')
     except Exception as e:
         db.session.rollback()
-        flash(f'Erreur lors de la suppression : {str(e)}')
-    
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('coefficients'))
+
 # --- Trimestres ---
 @app.route('/trimestres', methods=['GET', 'POST'])
 def trimestres():
@@ -611,7 +618,7 @@ def trimestres():
         </div>
         <div>
             <label>Nom du trimestre</label>
-            <input name="nom" placeholder="Trimestre 1" required>
+            <input name="nom" placeholder="T1" required>
         </div>
         <button class="btn btn-success">Ajouter</button>
     </form>
@@ -645,10 +652,14 @@ def trimestres():
 
 @app.route('/trimestres/supprimer/<int:id>')
 def supprimer_trimestre(id):
-    trimestre = Trimestre.query.get_or_404(id)
-    db.session.delete(trimestre)
-    db.session.commit()
-    flash('Trimestre supprimé.')
+    try:
+        trimestre = Trimestre.query.get_or_404(id)
+        db.session.delete(trimestre)
+        db.session.commit()
+        flash('Trimestre supprimé avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('trimestres'))
 
 # --- Étudiants ---
@@ -729,10 +740,14 @@ def etudiants():
 
 @app.route('/etudiants/supprimer/<int:id>')
 def supprimer_etudiant(id):
-    etudiant = Etudiant.query.get_or_404(id)
-    db.session.delete(etudiant)
-    db.session.commit()
-    flash('Étudiant supprimé.')
+    try:
+        etudiant = Etudiant.query.get_or_404(id)
+        db.session.delete(etudiant)
+        db.session.commit()
+        flash('Étudiant supprimé avec succès.')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Erreur : {str(e)}')
     return redirect(url_for('etudiants'))
 
 # --- Saisie des notes ---
@@ -768,7 +783,6 @@ def saisie():
                 if note is None:
                     continue
                 numero = 1 if type_eval == 'devoir' else 4
-                # Chercher si l'évaluation existe déjà
                 eval_exist = Evaluation.query.filter_by(
                     etudiant_id=etudiant.id,
                     discipline_id=discipline_id,
@@ -1048,7 +1062,6 @@ def generer_bulletin_pdf_eleve(etudiant_id, trimestre_id):
     trimestre = Trimestre.query.get_or_404(trimestre_id)
     classe = etudiant.classe
     
-    # Récupérer toutes les disciplines avec leur coefficient
     disciplines = db.session.query(Discipline, Coefficient.coef).join(
         Coefficient, Coefficient.discipline_id == Discipline.id
     ).filter(Coefficient.classe_id == classe.id).order_by(Discipline.nom).all()
@@ -1158,7 +1171,6 @@ def generer_pdf_annuel_eleve(etudiant_id):
         Coefficient, Coefficient.discipline_id == Discipline.id
     ).filter(Coefficient.classe_id == classe.id).order_by(Discipline.nom).all()
     
-    # Construction du tableau annuel
     entetes = ['Discipline']
     for trim in trimestres:
         entetes.append(trim.nom)
@@ -1177,7 +1189,6 @@ def generer_pdf_annuel_eleve(etudiant_id):
             else:
                 ligne.append('-')
         
-        # Moyenne annuelle pour cette discipline
         if moyennes_trimestres:
             moyenne_annuelle = sum(moyennes_trimestres) / len(moyennes_trimestres)
             ligne.append(format_note(moyenne_annuelle))
@@ -1185,7 +1196,6 @@ def generer_pdf_annuel_eleve(etudiant_id):
             ligne.append('-')
         donnees.append(ligne)
     
-    # Ligne des moyennes générales
     ligne_moyennes = ['Moyenne générale']
     moyennes_generales = []
     for trim in trimestres:
